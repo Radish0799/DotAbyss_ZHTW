@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "generate-translations": "node tools/generate-embedded-translations.mjs",
+    "build": "npm run generate-translations && frida-compile -S -o dist/libgadget.js.so src/index.ts"
+  },
+  "devDependencies": {
+    "@types/frida-gum": "^19.0.1",
+    "@types/node": "~20.9",
+    "frida-compile": "^19.0.4",
+    "frida-il2cpp-bridge": "^0.12.1"
+  }
+}

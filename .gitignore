@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+
+# Build inputs and outputs
+apk/
+dist/
+*.apk
+*.xapk
+*.apks
+*.aab
+*.idsig
+*.part
+
+# Signing keys and secrets (never commit these)
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+.env
+.env.*
+!.env.example
+.secret
+
+# Generated translation bundle and local translation checkouts
+src/embedded-translations.ts
+upstream-translation/
+
+# Locally supplied binaries and tools
+frida/*
+!frida/libgadget.config.so
+tools/*.jar
+tools/Il2CppDumper/
+tools/Il2CppDumper.zip
+
+# Local or incompatible font bundle
+res/notosanscjktc
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+build_*local.py
+build_local.sh
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
