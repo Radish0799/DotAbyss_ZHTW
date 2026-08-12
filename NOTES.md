@@ -278,6 +278,48 @@ FONT FAILED: Error: access violation accessing 0x0
 會「完全無輸出」還有第二層原因：`failFont()` 當時只有 `console.error` 和 `send()`，
 兩個在 script 模式都送不出去，例外就這樣人間蒸發。**現在已加 nativeLog。**
 
+## 五之四之二、🩸 跨專案抄 hook 前，一定要先 dump 目標的方法簽章
+
+2026-08-12。我把 anosu/DMM-Mod 的 `disableVoiceInterruption()` 照抄過來，
+沒查證簽章就上機 → **劇情語音整個消失，播一段後跳錯誤**。
+
+從裝置 dump 出來的實際簽章：
+
+```
+PlaySound(Absf.SoundCategory category, System.String cueSheetName,
+          System.String cueId, System.Single playbackVolume, System.Boolean loop)
+          -> Absf.Cri.ICriSoundPlayback
+StopCategory(System.Int32 nCategory, System.Boolean playFade) -> System.Void
+```
+
+**`PlaySound` 有五個參數，我當成一個在轉發**，後面四個（cue 名稱、cue ID、
+音量、循環旗標）全是垃圾值。這才是聲音消失的原因。
+
+順帶一提，我當時「推測」是 `StopCategory` 的回傳值被吞掉 —— **推測是錯的**，
+它本來就是 `void`。這也是為什麼要 dump 而不是推理。
+
+參考專案的程式碼可以借「作法」，但**簽章一定要對目標自己驗**：
+兩個遊戲即使系出同源，方法多載也可能不同。
+
+現在 `hookVoiceInterruption()` 的寫法：
+
+- 用 `klass.method(name, 參數數量)` 指定多載，不靠猜
+- 五個參數原封不動全部轉發
+- Voice 分類同時接受字串 `"Voice"` 與數值 `2`（IL2CPP 列舉在 JS 端的樣子還沒確認，
+  所以兩種都收，並印出前三次實際值）
+- **失敗即放棄**：hook 內任何例外都會設 `voiceSuppressionOff`、之後一律走原始行為。
+  寧可功能不生效，也不要弄壞遊戲既有行為。
+
+### 附帶：logcat 緩衝區預設不夠大
+
+這遊戲的 log 量大到預設緩衝區只留得住**約 90 秒**，開機時印的
+`injector started` / `hooked …` / `SNDAPI …` 會在你查詢前就被沖掉。
+診斷開機階段前先跑：
+
+```bash
+adb logcat -G 32M
+```
+
 ## 五之五、工具坑：`Select-String` 在這個檔案上會給假陰性
 
 `dist/libgadget.js.so` 是 33 MB 而且幾乎是單行。PowerShell 的
