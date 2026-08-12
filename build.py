@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parent
 R18_APP_ID = 771484
 R18_PACKAGE = "jp.co.fanzagames.dotabyss_x_a"
 ALL_AGES_PACKAGES = {"com.exnoa.abyss"}
+# Entries this builder removes on purpose, so restore_lost_entries() does not
+# put them back.
+INTENTIONAL_REMOVALS = ("lib/armeabi-v7a/",)
 
 
 def sdk_root() -> Path:
@@ -123,16 +126,17 @@ def apk_version(apk: Path, tools: dict[str, list[str]]) -> str | None:
     return match.group(1) if match else None
 
 
-def refuse_stale_reinject(patched: Path, tools: dict[str, list[str]]) -> None:
+def refuse_stale_reinject(patched: Path, tools: dict[str, list[str]]) -> str | None:
     """--reinject rebuilds on top of the previous patched APK, so after an official
     update it would silently ship the old game.  enforce_r18 only checks the package
-    name and label, which cannot catch that."""
+    name and label, which cannot catch that.  Returns the game version so the caller
+    can find the matching official APK."""
     current = apk_version(patched, tools)
     try:
         latest = latest_r18_info()["app_version_name"]
     except (OSError, SystemExit, ValueError) as error:
         print(f"warning: could not reach the DMM API to check for a newer game ({error})")
-        return
+        return current
     if current and latest and current != latest:
         raise SystemExit(
             f"refusing --reinject: it would rebuild on the OLD game version.\n"
@@ -141,6 +145,7 @@ def refuse_stale_reinject(patched: Path, tools: dict[str, list[str]]) -> None:
             f"Run a full build instead:  python build.py"
         )
     print(f"Game version {current} is current.")
+    return current
 
 
 def enforce_r18(apk: Path, tools: dict[str, list[str]]) -> str:
@@ -217,6 +222,45 @@ def inject_native(apk: Path, gadget: Path, script: Path, config: Path) -> None:
     os.replace(temporary, apk)
 
 
+def restore_lost_entries(official: Path, patched: Path) -> int:
+    """Put back the res/ files apktool loses to Windows case-insensitivity.
+
+    The official APK is resource-obfuscated (AndResGuard), so res/ holds short
+    names that collide only in case: res/S0.png and res/s0.png are two unrelated
+    drawables.  `apktool d -r` copies them out verbatim -- -r skips *decoding*,
+    not extraction -- and on NTFS both land on one path, so `apktool b` can only
+    put one back.  resources.arsc is preserved byte-for-byte and still points at
+    the lost name, so Android raises Resources$NotFoundException the moment such
+    a resource is inflated.  50 files went missing this way; drawable/dmmgames_logo
+    lost its hdpi and xxhdpi variants, which crash-loops the DMM Store SDK splash
+    on every xxhdpi device (Pixel 9a) while xhdpi devices never notice.
+
+    Survivors are byte-identical to the originals -- verified by hash across all
+    49 collision groups -- so the repair only ever adds entries back.
+    """
+    with zipfile.ZipFile(official) as source:
+        originals = {i.filename: i for i in source.infolist() if not i.is_dir()}
+        with zipfile.ZipFile(patched) as target:
+            present = {i.filename for i in target.infolist()}
+        lost = sorted(name for name in originals
+                      if name not in present
+                      and not name.startswith("META-INF/")
+                      and not name.startswith(INTENTIONAL_REMOVALS))
+        strays = [name for name in lost if not name.startswith("res/")]
+        if strays:
+            raise SystemExit(
+                "the apktool round-trip dropped files outside res/, which this repair "
+                f"does not cover: {', '.join(strays[:10])}")
+        if not lost:
+            print("Resource check: nothing lost in the apktool round-trip.")
+            return 0
+        with zipfile.ZipFile(patched, "a") as target:
+            for name in lost:
+                target.writestr(originals[name], source.read(name))
+    print(f"Restored {len(lost)} res/ entries apktool lost to Windows case-insensitivity.")
+    return len(lost)
+
+
 def sign(apk: Path, keystore: Path, password: str, tools: dict[str, list[str]]) -> None:
     aligned = apk.with_suffix(".aligned.apk")
     run(tools["zipalign"] + ["-f", "-p", "4", str(apk), str(aligned)])
@@ -241,6 +285,7 @@ def patch_base(base: Path, output: Path, decoded: Path, font_bundle: Path | None
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(font_bundle, destination)
     run(tools["apktool"] + ["b", str(decoded), "-f", "-o", str(output)])
+    restore_lost_entries(base, output)
 
 
 def main() -> None:
@@ -283,11 +328,19 @@ def main() -> None:
         # input, and none of them depend on the script, so only the gadget payload
         # has to be replaced.  Turns a ~20 minute rebuild into about a minute.
         enforce_r18(args.input, tools)
-        refuse_stale_reinject(args.input, tools)
+        version = refuse_stale_reinject(args.input, tools)
         output = args.output.with_suffix(".apk")
         if args.input.resolve() != output.resolve():
             shutil.copy2(args.input, output)
         inject_native(output, args.gadget, script, config)
+        # A previous full build may have lost res/ entries to the case collision;
+        # reinject inherits that damage, so repair it here too.
+        official = ROOT / "apk" / f"DotAbyssX-{version}-official.apk" if version else None
+        if official and official.is_file():
+            restore_lost_entries(official, output)
+        else:
+            print(f"warning: {official} not available; cannot check for res/ entries "
+                  f"lost to Windows case-insensitivity")
         ensure_keystore(args.keystore, args.password, tools)
         sign(output, args.keystore, args.password, tools)
         print(f"rebuilt (gadget script only): {output}")

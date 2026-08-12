@@ -381,3 +381,54 @@ adb logcat -s DotAbyssHook:*
 見 README「手機實測重啟流程」。重點：Planet VPN 連 `Japan - Osaka` →
 等畫面顯示 `You are protected` → 開遊戲 → 等紫色 `LOADING` 出現後 8～11 秒、
 且還沒到 `GAME START` 時，從通知列按 `Disconnect`。
+
+## 十、🩸 apktool 在 Windows 上弄丟大小寫衝突的資源（2026-08-12 事故）
+
+**症狀**：朋友的 Pixel 9a 一直閃退，我的 OPPO（Android 15）完全正常。
+hook 本身沒問題 —— gadget 載入成功、13 個 hook 全掛上、撐了 4 秒才死。
+崩潰堆疊落在 DMM Store SDK 的 Activity，不是 `UnityPlayerActivity`：
+
+```
+InflateException: layout/activity_logo 第 25 行 → Error inflating android.widget.ImageView
+  └─ Resources$NotFoundException: drawable/dmmgames_logo (ID #0x7f07008d)
+       └─ Resources$NotFoundException: File res/S0.png
+            └─ java.io.FileNotFoundException: res/S0.png
+```
+
+**根因**：官方 APK 有做資源混淆（AndResGuard），`res/` 底下是 `S0.png`、`s0.png`
+這種只差大小寫的短名 —— 在 Android 上是兩個**完全無關**的資源
+（`drawable/dmmgames_logo` 和 `drawable/abc_scrubber_control_to_pressed_mtrl_000`）。
+`apktool d -r` 把它們原樣解到 NTFS 上，`-r`（`--no-res`）只是不「解碼」資源，
+檔案照樣落地，於是兩個名字撞成同一個路徑；`apktool b` 回包時只剩一個。
+`resources.arsc` 是原封不動保留的，還指著消失的那個名字，
+Android 一 inflate 到就丟 `Resources$NotFoundException`。
+
+**實測損失**：49 個碰撞組、**50 個檔案**不見（`hq` 那組有三個成員）。
+存活的那 49 個檔案**內容是對的**（逐一 sha256 比對過官方 APK），所以修復純粹是「補回去」，
+不需要動既有條目。
+
+**為什麼只有他的手機掛**：`drawable/dmmgames_logo` 有三個密度變體，
+`hdpi`(`res/MA.png`) 和 `xxhdpi`(`res/S0.png`) 都掉了，**只剩 `xhdpi` 活著**。
+Pixel 9a 約 422dpi → 落在 xxhdpi 桶 → 解析到 `res/S0.png` → 檔案不存在 → 閃退。
+我的 OPPO 是 xhdpi 桶，永遠踩不到。
+**Android 不會因為「檔案不存在」就退回別的密度** —— 資源表查詢本身已經成功了，
+它只是打不開那個檔。所以這種傷害是「看機器」的，不是「看使用者操作」的。
+
+另外 **26 個資源三個密度全滅**，是還沒引爆的地雷，任何機器只要走到那條路徑就炸：
+`layout/activity_webview_timeout`（DMM SDK 連線逾時畫面）、
+`drawable/btn_outlined_cyan` / `btn_outlined_magenta`、
+`drawable/material_cursor_drawable`（輸入框游標）、
+`drawable/abc_ic_clear_material`、`layout/select_dialog_item_material`、
+`design_snackbar_background` 等。
+
+**修法**：`build.py` 的 `restore_lost_entries()` —— 回包後、簽名前，
+把「官方 APK 有、產出沒有」的條目原封不動塞回去
+（排除 `META-INF/` 和刻意刪掉的 `lib/armeabi-v7a/`）。
+全新建置走 `patch_base()`，`--reinject` 也會補（用 `apk/DotAbyssX-<版本>-official.apk`），
+所以舊的壞 APK 直接 `--reinject` 一分鐘就能修好。
+如果哪天 apktool 掉的是 `res/` 以外的東西，它會直接 `SystemExit` 而不是默默放行。
+
+**教訓**：這個專案的驗證一直只在一台機器上做。
+「在我機器上正常」對**密度／語系／夜間模式**相關的資源問題完全沒有證明力，
+因為每台機器解析到的檔案不一樣。回包後比對 zip 條目清單是零成本的，
+應該每次都做 —— 也就是現在 `restore_lost_entries()` 做的事。
