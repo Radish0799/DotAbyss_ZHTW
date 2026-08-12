@@ -53,6 +53,7 @@ let novelHits = 0;
 let mosaicHidden = 0;
 let mosaicLogs = 0;
 let allowStopVoice = 0;
+let voiceSuppressionOff = false;
 const unmatchedTexts = new Set<string>();
 
 function log(message: string) {
@@ -393,6 +394,29 @@ function hookSoundCaution() {
 // Voice lines get cut off because starting one stops the whole Voice category.
 // Suppress that specific stop, except when we ourselves triggered it.
 // From anosu/DMM-Mod's disableVoiceInterruption().
+// Voice lines get cut off because starting one stops the whole Voice category.
+// Suppress that specific stop, except when we ourselves asked for it.
+//
+// Written against the signatures dumped from the device, NOT copied blind:
+//   PlaySound(Absf.SoundCategory, String cueSheetName, String cueId,
+//             Single playbackVolume, Boolean loop) -> Absf.Cri.ICriSoundPlayback
+//   StopCategory(Int32 nCategory, Boolean playFade) -> Void
+// The first version of this hook treated PlaySound as taking ONE argument and
+// forwarded only that, which fed the other four as garbage and killed all audio.
+const VOICE_CATEGORY = 2;
+let voiceProbeLogs = 0;
+
+function isVoiceCategory(category: unknown): boolean {
+    try {
+        const text = String(category);
+        if (text === "Voice") return true;
+        const value = Number(text);
+        return Number.isFinite(value) && value === VOICE_CATEGORY;
+    } catch (_) {
+        return false;
+    }
+}
+
 function hookVoiceInterruption() {
     let klass: Il2Cpp.Class;
     try {
@@ -402,20 +426,47 @@ function hookVoiceInterruption() {
         return;
     }
     try {
-        const stop = klass.method("StopCategory");
-        stop.implementation = function (category: number, flag: boolean) {
-            // category 2 == Voice. Let it through only when re-entered from PlaySound.
-            if (allowStopVoice > 0 || category !== 2 || flag) {
-                return this.method("StopCategory").invoke(category, flag);
+        klass.method("StopCategory", 2).implementation = function (
+            nCategory: number, playFade: boolean
+        ) {
+            try {
+                if (voiceSuppressionOff || allowStopVoice > 0 || nCategory !== VOICE_CATEGORY || playFade) {
+                    this.method("StopCategory", 2).invoke(nCategory, playFade);
+                }
+                // else: swallow it. Return type is Void, so returning nothing is correct.
+            } catch (error) {
+                // Fail open: never let this hook be the reason audio breaks.
+                voiceSuppressionOff = true;
+                nativeLog(`VOICE StopCategory failed, suppression disabled: ${error}`);
+                this.method("StopCategory", 2).invoke(nCategory, playFade);
             }
         };
-        const play = klass.method("PlaySound");
-        play.implementation = function (sound: Il2Cpp.Object) {
-            if (String(sound) === "Voice") {
-                allowStopVoice++;
-                try { this.method("StopCategory").invoke(2, false); } finally { allowStopVoice--; }
+
+        klass.method("PlaySound", 5).implementation = function (
+            category: Il2Cpp.Parameter.Type, cueSheetName: Il2Cpp.Parameter.Type,
+            cueId: Il2Cpp.Parameter.Type, playbackVolume: Il2Cpp.Parameter.Type,
+            loop: Il2Cpp.Parameter.Type
+        ) {
+            try {
+                if (!voiceSuppressionOff && isVoiceCategory(category)) {
+                    if (voiceProbeLogs < 3) {
+                        voiceProbeLogs++;
+                        nativeLog(`VOICE play category="${String(category)}" cue=${String(cueId)}`);
+                    }
+                    allowStopVoice++;
+                    try {
+                        this.method("StopCategory", 2).invoke(VOICE_CATEGORY, false);
+                    } finally {
+                        allowStopVoice--;
+                    }
+                }
+            } catch (error) {
+                voiceSuppressionOff = true;
+                nativeLog(`VOICE PlaySound pre-step failed, suppression disabled: ${error}`);
             }
-            return this.method("PlaySound").invoke(sound);
+            // All five arguments, always forwarded.
+            return this.method("PlaySound", 5)
+                .invoke(category, cueSheetName, cueId, playbackVolume, loop);
         };
         log("hooked Project.Novel.NovelSoundManager (voice interruption)");
     } catch (error) {
