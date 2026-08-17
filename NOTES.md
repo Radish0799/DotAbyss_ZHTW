@@ -33,7 +33,8 @@
 
 ## 二、字典結構
 
-`dist/translation-upstream/dotabyss-translation-client-version-s88037zz/`
+`../../Dot-abyess-Lienchu-version/dotabyss-translation-client-version-s88037zz/`
+（相對本專案；就是 `generate-embedded-translations.mjs` 解析到的那個位置）
 
 - `static/`、`ui_texts/`、`names/`、`other/*`、`add-on/*` → 扁平 `{日文: 中文}`
 - `novels_*_all/` → **巢狀** `{劇情ID: {日文: 中文}}`，`flatten()` 會遞迴攤平

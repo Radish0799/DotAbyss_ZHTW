@@ -8,15 +8,15 @@ const relativeFiles = Array.from(
     configSource.matchAll(/"([^"\r\n]+\/zh_Hant\.json)"/g),
     match => match[1]
 );
-// Source order matters.  The working repo wins over the vendored copies, because
-// defaulting to a vendored copy silently embeds stale translations: you edit the
-// real repo, build, and ship the old data with no error anywhere.
+// No vendored fallback copies on purpose.  There used to be two (dist/translation-upstream
+// and upstream-translation); falling back to one silently embeds stale translations —
+// you edit the real repo, build, and ship the old data with no error anywhere.
+// Better to throw than to guess: point DOTABYSS_TRANSLATIONS somewhere if the sibling
+// checkout is not where this expects it.
 const REPO_DIR = "dotabyss-translation-client-version-s88037zz";
 const candidates = [
     process.env.DOTABYSS_TRANSLATIONS && resolve(process.env.DOTABYSS_TRANSLATIONS),
-    join(root, "..", "..", "Dot-abyess-Lienchu-version", REPO_DIR),
-    join(root, "dist", "translation-upstream", REPO_DIR),
-    join(root, "upstream-translation", REPO_DIR)
+    join(root, "..", "..", "Dot-abyess-Lienchu-version", REPO_DIR)
 ].filter(Boolean);
 
 const translationRoot = candidates.find(dir => existsSync(join(dir, "static", "zh_Hant.json")));
