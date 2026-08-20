@@ -28,7 +28,7 @@
   因此改用**通用 setter hook**：`TMPro.TMP_Text.set_text` 與 `UnityEngine.UI.Text.set_text`，
   對整份扁平化字典做精確 key 查表，另加 `{[VALUE]}` / `{0}` 佔位符的樣板比對。
 - 翻譯資料 TSK 走 CDN 即時下載；DotAbyss 改成 **編譯期內嵌**
-  （`tools/generate-embedded-translations.mjs` → `src/embedded-translations.ts`，約 17 MB），
+  （`tools/generate-embedded-translations.mjs` → `src/embedded-translations.ts`，約 18 MB），
   因為這遊戲啟動時要求日本 VPN、之後又必須斷線，網路請求會在斷線瞬間中斷。
 
 ## 二、字典結構
@@ -39,11 +39,13 @@
 - `static/`、`ui_texts/`、`names/`、`other/*`、`add-on/*` → 扁平 `{日文: 中文}`
 - `novels_*_all/` → **巢狀** `{劇情ID: {日文: 中文}}`，`flatten()` 會遞迴攤平
 - 換行在字典裡是 `<br>`，全形空白是 `　`
-- 攤平後共 **87264** 筆
+- 攤平後共 **87642** 筆（2026-08-20 官方更新後）
 
-## 三、實機現況（2026-08-11）
+## 三、實機現況（2026-08-20）
 
-裝置：OPPO CPH2695 / Android 15，已安裝 `dist/DotAbyssX-R18-zh-Hant.apk`（1.7.0）。
+裝置：OPPO CPH2695 / Android 15，已安裝 `dist/DotAbyssX-R18-zh-Hant.apk`（**1.8.0**）。
+1.7.0 → 1.8.0 是完整重打包（不是 `--reinject`），同一把 keystore，
+`adb install -r` 升級後 `firstInstallTime` 不變，存檔保留。
 
 **會翻譯的**：角色名、稱號、技能／能力說明、對話框按鈕（取消／播放）、
 道具名樣板（`ランク4のコモン ウィンドマント` → `普通風之披風 Rank4`）。
