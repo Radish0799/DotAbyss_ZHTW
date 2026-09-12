@@ -2,7 +2,8 @@
   "private": true,
   "scripts": {
     "generate-translations": "node tools/generate-embedded-translations.mjs",
-    "build": "npm run generate-translations && frida-compile -S -o dist/libgadget.js.so src/index.ts"
+    "ensure-dist": "node -e \"require('fs').mkdirSync('dist',{recursive:true})\"",
+    "build": "npm run generate-translations && npm run ensure-dist && frida-compile -S -o dist/libgadget.js.so src/index.ts"
   },
   "devDependencies": {
     "@types/frida-gum": "^19.0.1",

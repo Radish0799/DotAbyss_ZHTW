@@ -45,14 +45,33 @@ npm install
 python -m pip install -r requirements.txt
 ```
 
-把必要的本機檔案放到以下位置：
+把必要的本機檔案放到以下位置。這些都被 `.gitignore` 擋著，clone 完不會有：
 
 ```text
 frida/gadget-android-arm64.so
-frida/libgadget.config.so
 tools/apktool.jar
-res/ttcuyuanj
+dotabyss.keystore
 ```
+
+（`frida/libgadget.config.so` 與 `res/ttcuyuanj` 有進版控，不用自己準備。）
+
+**`dotabyss.keystore` 是其中唯一重建不出來的。** Android 只認簽章，換一把就等於
+所有已安裝的人必須卸載重裝、存檔全失。`build.py` 因此在最開頭就先驗簽章身分：
+
+- 檔案不存在 → **直接中止**。真的要一個全新、與現有玩家無關的身分（自己的 fork、
+  丟棄式測試版），才加 `--allow-new-keystore` 明確表態
+- 檔案存在 → 比對憑證 SHA-256 與 `keystore-fingerprint.txt`，不合就中止
+
+第二條在防的是：誤生過一把錯的之後，檔案就「存在」了，之後再也不會有任何東西抱怨。
+釘住指紋的方法：
+
+```powershell
+keytool -list -v -keystore dotabyss.keystore -alias dotabyss
+```
+
+把 `SHA256:` 那行的值寫進 `keystore-fingerprint.txt` 第一行。這個檔要進版控 ——
+指紋來自公開憑證，對任何已發布的 APK 跑 `apksigner verify --print-certs` 都讀得到，
+不是秘密；私鑰只在 `dotabyss.keystore` 裡。
 
 翻譯資料夾可透過 `DOTABYSS_TRANSLATIONS` 指定；資料夾內必須包含 `static/zh_Hant.json` 等翻譯檔：
 

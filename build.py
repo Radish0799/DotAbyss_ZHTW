@@ -71,15 +71,130 @@ def run(args: list[str], cwd: Path | None = None, capture: bool = False) -> str:
     return result.stdout if capture else ""
 
 
-def ensure_keystore(path: Path, password: str, tools: dict[str, list[str]]) -> None:
-    if path.exists():
+# The SHA-256 fingerprint of the signing certificate, so a wrong keystore is caught
+# before it ships instead of after players report lost saves.  A fingerprint is derived
+# from the *public* certificate and is printed by anyone who runs `apksigner verify
+# --print-certs` on a released APK -- it is not a secret and belongs in git.  The
+# private key stays out (see .gitignore).
+FINGERPRINT_FILE = ROOT / "keystore-fingerprint.txt"
+
+KEYSTORE_MISSING = """\
+refusing to build: signing keystore not found at {path}
+
+This is the one file in this project that cannot be rebuilt.  Android identifies an
+app by its signature, so signing with a different key means every player who already
+installed the translated APK must uninstall first -- their save data is gone, with no
+way back.
+
+Restore the original `dotabyss.keystore` (password manager attachment, encrypted
+drive, private cloud) and run this again.  See README_換機.md, section 一.
+
+If you genuinely want a brand-new, unrelated signing identity -- a personal fork, a
+throwaway test build, nothing that existing players will ever install on top of --
+pass --allow-new-keystore to say so explicitly.
+"""
+
+KEYSTORE_MISMATCH = """\
+refusing to build: {path} is not the keystore this project publishes with
+
+  expected  {expected}
+  found     {actual}
+
+Signing with this key would force every existing player to uninstall and lose their
+save data.  The usual cause is an earlier run that generated a fresh keystore -- the
+file exists, so nothing complained afterwards.
+
+Move the wrong one aside, put the original back, and run this again.  To re-pin
+because the project deliberately changed keys, edit {fingerprint_file}.
+"""
+
+NOT_PINNED = """\
+warning: no expected fingerprint recorded, so the keystore cannot be verified.
+
+  {path}
+  SHA-256  {actual}
+
+Confirm this matches the old machine (or `apksigner verify --print-certs` on a
+published APK), then pin it so a wrong keystore can never slip through again:
+
+  echo {actual} > {fingerprint_file}
+"""
+
+
+def read_expected_fingerprint() -> str | None:
+    if not FINGERPRINT_FILE.is_file():
+        return None
+    # Tolerate comments, blank lines and lowercase/space-separated hand-pasted values.
+    for line in FINGERPRINT_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            return line.replace(" ", "").upper()
+    return None
+
+
+def parse_sha256_fingerprint(text: str) -> str | None:
+    """Pull the certificate SHA-256 out of `keytool -list -v` output.
+
+    Matching the full 32-byte colon form on purpose: a bare "SHA256" substring also
+    appears in "Signature algorithm name: SHA256withRSA" a few lines away.  The label
+    is matched case-insensitively -- keytool prints it uppercase, but the colon-hex
+    requirement is what actually does the disambiguating, so nothing is lost.
+    """
+    match = re.search(r"SHA-?256:\s*((?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})",
+                      text, re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
+def keystore_fingerprint(path: Path, password: str, tools: dict[str, list[str]]) -> str:
+    output = run(tools["keytool"] + [
+        "-list", "-v", "-keystore", str(path), "-alias", "dotabyss",
+        "-storepass", password,
+    ], capture=True)
+    fingerprint = parse_sha256_fingerprint(output)
+    if fingerprint is None:
+        raise SystemExit(
+            f"could not read a SHA-256 fingerprint out of {path}; is the alias still "
+            f"'dotabyss' and the password right?\n\nkeytool said:\n{output}"
+        )
+    return fingerprint
+
+
+def check_keystore(path: Path, password: str, tools: dict[str, list[str]],
+                   allow_new: bool = False) -> None:
+    """Verify the signing identity *before* any expensive work happens.
+
+    This used to be `ensure_keystore`, which created a new keystore whenever the file
+    was absent -- no prompt, no warning, no non-zero exit.  The build then succeeded
+    and produced an installable APK signed by a stranger key, which is exactly the
+    failure this project cannot absorb.  Fail closed instead.
+    """
+    if not path.exists():
+        if not allow_new:
+            raise SystemExit(KEYSTORE_MISSING.format(path=path))
+        run(tools["keytool"] + [
+            "-genkeypair", "-noprompt", "-keystore", str(path),
+            "-storepass", password, "-keypass", password, "-alias", "dotabyss",
+            "-keyalg", "RSA", "-keysize", "4096", "-validity", "10000",
+            "-dname", "CN=DotAbyss Translation,OU=Personal Mod,O=Personal Mod,C=TW",
+        ])
+        print(f"\nGenerated a NEW signing identity at {path} because "
+              f"--allow-new-keystore was given.")
+        print(f"SHA-256  {keystore_fingerprint(path, password, tools)}")
+        print("Anything signed with this cannot be installed over an existing "
+              "translated APK.  Do not publish it as an update.\n")
         return
-    run(tools["keytool"] + [
-        "-genkeypair", "-noprompt", "-keystore", str(path),
-        "-storepass", password, "-keypass", password, "-alias", "dotabyss",
-        "-keyalg", "RSA", "-keysize", "4096", "-validity", "10000",
-        "-dname", "CN=DotAbyss Translation,OU=Personal Mod,O=Personal Mod,C=TW",
-    ])
+
+    actual = keystore_fingerprint(path, password, tools)
+    expected = read_expected_fingerprint()
+    if expected is None:
+        print(NOT_PINNED.format(path=path, actual=actual,
+                                fingerprint_file=FINGERPRINT_FILE.name))
+    elif actual != expected:
+        raise SystemExit(KEYSTORE_MISMATCH.format(
+            path=path, expected=expected, actual=actual,
+            fingerprint_file=FINGERPRINT_FILE.name))
+    else:
+        print(f"Signing keystore verified: SHA-256 {actual}")
 
 
 def patch_activity(decoded: Path) -> None:
@@ -301,12 +416,20 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "dist/DotAbyssX-R18-zh-Hant")
     parser.add_argument("--keystore", type=Path, default=ROOT / "dotabyss.keystore")
     parser.add_argument("--password", default="123456")
+    parser.add_argument("--allow-new-keystore", action="store_true",
+                        help="create a new signing identity if --keystore is absent. Only for a "
+                             "fork or a throwaway test build: APKs signed with a new key cannot "
+                             "be installed over an existing translated APK, so publishing one as "
+                             "an update wipes every player's save data.")
     parser.add_argument("--reinject", action="store_true",
                         help="input is an APK this builder already patched: refresh only the "
                              "gadget script and re-sign, skipping the slow apktool round-trip")
     args = parser.parse_args()
 
     tools = resolve_tools()
+    # Up front, before npm, before the ~20 minute apktool round-trip: an unusable
+    # signing identity should cost seconds to find out about, not a whole build.
+    check_keystore(args.keystore, args.password, tools, args.allow_new_keystore)
     if args.input is None and args.reinject:
         args.input = args.output.with_suffix(".apk")
     if args.input is None:
@@ -341,7 +464,6 @@ def main() -> None:
         else:
             print(f"warning: {official} not available; cannot check for res/ entries "
                   f"lost to Windows case-insensitivity")
-        ensure_keystore(args.keystore, args.password, tools)
         sign(output, args.keystore, args.password, tools)
         print(f"rebuilt (gadget script only): {output}")
         print("Same signature as before: `adb install -r` keeps the existing save data.")
@@ -366,7 +488,6 @@ def main() -> None:
             patch_base(base, patched_base, temp / "decoded-base", args.font_bundle, tools)
             shutil.copy2(patched_base, base)
             inject_native(arm64_split, args.gadget, script, config)
-            ensure_keystore(args.keystore, args.password, tools)
             for apk in apks:
                 sign(apk, args.keystore, args.password, tools)
             output = args.output.with_suffix(".xapk")
@@ -381,7 +502,6 @@ def main() -> None:
             output = args.output.with_suffix(".apk")
             patch_base(args.input, output, temp / "decoded-base", args.font_bundle, tools)
             inject_native(output, args.gadget, script, config)
-            ensure_keystore(args.keystore, args.password, tools)
             sign(output, args.keystore, args.password, tools)
 
     print(f"built: {output}")
