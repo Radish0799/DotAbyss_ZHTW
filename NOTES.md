@@ -7,6 +7,33 @@
 > `res/notosanscjktc` 是 Unity 2021.3.25f1、來自 TSKHook，**不能用**——
 > 版本不合會讓文字渲染成空白（不是方框），詳見五之三。
 
+## 〇、本機工具版本（2026-09-13 換機後重裝）
+
+換機時這些全都不在 git 裡，得自己補。版本記在這裡，免得下次又要試。
+
+| 工具 | 版本 | 位置 |
+| --- | --- | --- |
+| Frida Gadget | **17.18.0** android-arm64 | `frida/gadget-android-arm64.so` |
+| apktool | **2.12.1** | `tools/apktool.jar` |
+| JDK | Temurin 21.0.12.1+1 | `D:/TWSK/tools/jdk-21`（`JAVA_HOME`）|
+| Android Build Tools | 34.0.0 | `D:/TWSK/tools/android-sdk`（`ANDROID_HOME`）|
+| platform-tools | adb 1.0.41 | 同上的 `platform-tools/`，已在 PATH |
+| gh | 2.100.0 | `D:/TWSK/tools/gh/bin` |
+
+Gadget 選 17.x 是因為 `frida-il2cpp-bridge` 0.12.2 與 `@types/frida-gum` ^19 對應的是
+Frida 17 的 gum API；換大版號要連著這兩個一起看。
+
+apktool 停在 **2.x 線**（最新的 2.12.1），不是當時已經發布的 3.0.3。這專案出貨過的
+APK 都是 2.x 編的，而 apktool 大版號會動到資源 round-trip 的行為——本檔五之一那個
+「Windows 大小寫不敏感吃掉 res/ 檔案」的修補正是針對 2.x 的行為寫的。要升 3.x
+請當成一次獨立的、需要實機驗證的改動，不要在補裝環境時順手換掉。
+
+Build Tools 的 zip 解開來叫 `android-14`，**必須改名成 `34.0.0`**：
+`build.py` 的 `latest_build_tools()` 用 `\d+(?:\.\d+)+` 比對資料夾名，
+不合就整個略過、退回去找 PATH 上的 `aapt`，然後報「missing required tool」。
+
+---
+
 ## 一、TSK 與 DotAbyss 的方法差異
 
 兩者共用同一套「把 Frida Gadget 塞進官方 APK」的骨架：
