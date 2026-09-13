@@ -75,7 +75,7 @@ def run(args: list[str], cwd: Path | None = None, capture: bool = False) -> str:
 # before it ships instead of after players report lost saves.  A fingerprint is derived
 # from the *public* certificate and is printed by anyone who runs `apksigner verify
 # --print-certs` on a released APK -- it is not a secret and belongs in git.  The
-# private key stays out (see .gitignore).
+# private key itself is dotabyss.keystore.
 FINGERPRINT_FILE = ROOT / "keystore-fingerprint.txt"
 
 KEYSTORE_MISSING = """\

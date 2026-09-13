@@ -45,7 +45,7 @@ npm install
 python -m pip install -r requirements.txt
 ```
 
-把必要的本機檔案放到以下位置。這些都被 `.gitignore` 擋著，clone 完不會有：
+把必要的本機檔案放到以下位置。前兩個被 `.gitignore` 擋著；`dotabyss.keystore` 不擋，但 repo 裡從來沒有它，clone 完一樣不會有：
 
 ```text
 frida/gadget-android-arm64.so
