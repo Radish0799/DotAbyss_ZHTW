@@ -99,55 +99,27 @@ Build Tools 的 zip 解開來叫 `android-14`，**必須改名成 `34.0.0`**：
 
 ## 三之二、🩸 不要用 `Il2Cpp.gc.choose` 做週期性掃描（2026-08-11 事故）
 
-我第一版的修法是每 1.5 秒跑一次 `refreshExistingTexts()`。**這會把遊戲整個卡死。**
+每 1.5 秒跑一次 `refreshExistingTexts()` 會把遊戲整個卡死，兩次實測都在掃描迴圈啟動後
+約 **40 秒** ANR 被系統殺掉。
 
 `Il2Cpp.gc.choose` 會呼叫 `il2cpp_gc_disable()` 並在持有 allocation lock 的狀態下走一次
-heap。實測單次成本隨 UI 元件增加而爆炸：
+heap，單次成本隨 UI 元件增加而爆炸：**81ms（31 個元件）→ 406ms（72 個）**，然後就沒有
+下一筆了。這台是 Android 15，用的是**會搬移物件的** `CollectorTypeCMC`；從 Frida 執行緒
+反覆鎖住配置、又跨執行緒呼叫 `set_text`，撐不過去。
 
-```
-14:34:41 text refresh embedded-complete #1; scanned=31; matched=7;  81ms
-14:34:49 text refresh periodic          #6; scanned=39; matched=1;  72ms
-14:35:16 text refresh periodic         #24; scanned=72; matched=6; 406ms   ← 然後就沒有下一筆了
-```
-
-兩次實測（我自動跑一次、使用者手動跑一次）都在掃描迴圈啟動後約 **40 秒**整個
-process 凍結：
-
-```
-SurfaceView[...UnityPlayerActivity] didn't commit buffer within 3000ms
-ANR ... Reason: Input dispatching timed out ... Waited 5001ms for MotionEvent
-Killing <pid> (adj 0): user request after error
-```
-
-注意 ANR 的觸發者是**觸控**，但觸控只是把已經死掉的狀態揭露出來——畫面在被點之前
-就已經停止更新，連 Frida 執行緒自己的 log 也一起停了。
-
-這台是 Android 15，log 開頭寫著 `Using generational CollectorTypeCMC GC`——**會搬移
-物件的** concurrent mark-compact 收集器。從 Frida 執行緒反覆鎖住配置、又跨執行緒
-呼叫 `set_text`，撐不過去。改動前的版本（只在啟動時掃一次）可以正常玩到主畫面。
+注意畫面在被點之前就已經停止更新（連 Frida 自己的 log 也停了），ANR 只是觸控把死掉的
+狀態揭露出來——**不要因為 ANR 說是 input timeout 就去查觸控**。
 
 **結論**：`gc.choose` 只能在啟動時跑**一次**當作補掃，絕對不要放進計時器。
-要抓後續畫面的靜態標籤，用 `OnEnable` hook——它由 Unity 自己的執行緒呼叫，
-閒置時零成本。
+要抓後續畫面的靜態標籤，用 `OnEnable` hook——它由 Unity 自己的執行緒呼叫，閒置時零成本。
 
 ## 四、劇情文字為什麼不能在 `set_text` 這層翻（已修，hook 點在 `NovelArgument.SetString`）
 
 **遊戲是「一個字一個 TMP_Text」在畫劇情文字。** 不是前綴漸增，是逐字拆開。
 
-實機 logcat（`dist/run4-logcat.txt`，14:46:56）：
-
-```
-UNMATCHED TMPro.TMP_Text.set_text :: "き"
-UNMATCHED TMPro.TMP_Text.set_text :: "ゃ"
-UNMATCHED TMPro.TMP_Text.set_text :: "あ"
-UNMATCHED TMPro.TMP_Text.set_text :: "ち"
-UNMATCHED TMPro.TMP_Text.set_text :: "び"
-UNMATCHED TMPro.TMP_Text.set_text :: "た"
-UNMATCHED TMPro.TMP_Text.set_text :: "ぁ"
-```
-
-那正是 `きゃあ～！　ちびたぁ～～～！` 被拆成單字。所以**在 `set_text` 這一層永遠
-不可能命中整句**，字典裡的 key 是整句，進來的是一個字。
+實機 logcat 是一連串 `UNMATCHED TMPro.TMP_Text.set_text :: "き"` / `"ゃ"` / `"あ"`…，
+正是 `きゃあ～！　ちびたぁ～～～！` 被一個字一個字送進來。所以**在 `set_text` 這一層
+永遠不可能命中整句**，字典裡的 key 是整句，進來的是一個字。
 
 → 所以必須往上一層攔，在元件拿到整行時替換。**這也解釋了為什麼 UI 能翻、劇情不能翻**
 ——UI 是整串進 `set_text`，劇情是逐字。
@@ -243,24 +215,15 @@ FONT FAILED at get_isDone: Error: access violation accessing 0x6ff5f50818
 
 ### 🩸 `TMP_Settings.fallbackFontAssets` 在這款遊戲上會 null deref
 
-```
-FONT FAILED: Error: access violation accessing 0x0
-```
+那是**靜態**屬性，底層讀 `TMP_Settings.instance`，而這遊戲沒有內建 TMP_Settings 資產
+→ instance 是 null（`access violation accessing 0x0`）。**改走每個 `TMP_FontAsset`
+自己的 `fallbackFontAssetTable`**，字型從元件的 `get_font()` 拿。
 
-那是**靜態**屬性，底層讀 `TMP_Settings.instance`，而這遊戲沒有內建 TMP_Settings
-資產 → instance 是 null。**改走每個 `TMP_FontAsset` 自己的
-`fallbackFontAssetTable`**，字型從元件的 `get_font()` 拿。
+加完 fallback 要呼叫 `font.ClearFallbackCharacterTable()`，否則 TMP 快取的
+「這個字找不到」結果會讓已判定成方框的字一直是方框。
 
-加完 fallback 要呼叫 `font.ClearFallbackCharacterTable()`，
-否則 TMP 快取的「這個字找不到」結果會讓已判定成方框的字一直是方框。
-
-⚠️ **不要直接 `set_font` 換掉元件字型**，那會連遊戲的描邊樣式一起換掉。
-`hookTextSetter` 裡原本就有一段 `set_font(selectedFont)`，在 `tmpFont` 永遠是 null
-的年代它是死的；一旦字型真的載入成功，它會**把每個元件的字型整包換掉**。
-已改成呼叫 `applyFont()` → `patchFontFallback()`。
-正解是加進 TMP 的 **fallback 表**（只有主圖集缺字時才會用到），
-但 `TMP_Settings` / `TMP_FontAsset` 的 fallback API 還沒 dump 到，
-15:13 那版有加 `TMPAPI` 探測，跑一次就會印出來。
+⚠️ **不要直接 `set_font` 換掉元件字型**，那會連遊戲的描邊樣式一起換掉。正解是加進
+fallback 表（只有主圖集缺字時才會用到），也就是現在的 `applyFont()` → `patchFontFallback()`。
 
 ## 六、🩸 三次凍結，三個不同原因（都是我造成的）
 
@@ -292,11 +255,9 @@ PlaySound(Absf.SoundCategory category, System.String cueSheetName,
 StopCategory(System.Int32 nCategory, System.Boolean playFade) -> System.Void
 ```
 
-**`PlaySound` 有五個參數，我當成一個在轉發**，後面四個（cue 名稱、cue ID、
-音量、循環旗標）全是垃圾值。這才是聲音消失的原因。
-
-順帶一提，我當時「推測」是 `StopCategory` 的回傳值被吞掉 —— **推測是錯的**，
-它本來就是 `void`。這也是為什麼要 dump 而不是推理。
+**`PlaySound` 有五個參數，抄來的版本當成一個在轉發**，後面四個全是垃圾值——
+這才是聲音消失的原因。（當時還「推測」問題出在 `StopCategory` 的回傳值被吞掉，
+但它本來就是 `void`。這就是為什麼要 dump 而不是推理。）
 
 參考專案的程式碼可以借「作法」，但**簽章一定要對目標自己驗**：
 兩個遊戲即使系出同源，方法多載也可能不同。
@@ -372,51 +333,25 @@ adb logcat -s DotAbyssHook:*
 
 ## 九、🩸 apktool 在 Windows 上弄丟大小寫衝突的資源（2026-08-12 事故）
 
-**症狀**：朋友的 Pixel 9a 一直閃退，我的 OPPO（Android 15）完全正常。
-hook 本身沒問題 —— gadget 載入成功、13 個 hook 全掛上、撐了 4 秒才死。
-崩潰堆疊落在 DMM Store SDK 的 Activity，不是 `UnityPlayerActivity`：
+**症狀**：別人的 Pixel 9a 一直閃退，這台 OPPO 完全正常。hook 本身沒問題，
+崩潰堆疊落在 DMM Store SDK 的 Activity：`InflateException` → `Resources$NotFoundException:
+File res/S0.png` → 檔案不存在。
 
-```
-InflateException: layout/activity_logo 第 25 行 → Error inflating android.widget.ImageView
-  └─ Resources$NotFoundException: drawable/dmmgames_logo (ID #0x7f07008d)
-       └─ Resources$NotFoundException: File res/S0.png
-            └─ java.io.FileNotFoundException: res/S0.png
-```
+**根因**：官方 APK 做過資源混淆（AndResGuard），`res/` 底下是 `S0.png`、`s0.png` 這種
+只差大小寫的短名，在 Android 上是兩個**完全無關**的資源。apktool 把它們解到 NTFS 上，
+兩個名字撞成同一個路徑，回包時只剩一個；`resources.arsc` 原封不動保留、還指著消失的
+那個名字。實測掉了 **50 個檔案**（49 個碰撞組），存活的內容都是對的，所以修復純粹是補回去。
 
-**根因**：官方 APK 有做資源混淆（AndResGuard），`res/` 底下是 `S0.png`、`s0.png`
-這種只差大小寫的短名 —— 在 Android 上是兩個**完全無關**的資源
-（`drawable/dmmgames_logo` 和 `drawable/abc_scrubber_control_to_pressed_mtrl_000`）。
-`apktool d -r` 把它們原樣解到 NTFS 上，`-r`（`--no-res`）只是不「解碼」資源，
-檔案照樣落地，於是兩個名字撞成同一個路徑；`apktool b` 回包時只剩一個。
-`resources.arsc` 是原封不動保留的，還指著消失的那個名字，
-Android 一 inflate 到就丟 `Resources$NotFoundException`。
+**為什麼只有他的手機掛**：`drawable/dmmgames_logo` 三個密度變體掉了兩個，只剩 xhdpi。
+Pixel 9a 落在 xxhdpi 桶 → 解析到掉了的那個 → 閃退；這台是 xhdpi 桶，永遠踩不到。
+**Android 不會因為「檔案不存在」就退回別的密度**——資源表查詢本身已經成功了，
+它只是打不開那個檔。另外還有 26 個資源三個密度全滅（DMM 連線逾時畫面、輸入框游標等），
+任何機器走到那條路徑就炸。
 
-**實測損失**：49 個碰撞組、**50 個檔案**不見（`hq` 那組有三個成員）。
-存活的那 49 個檔案**內容是對的**（逐一 sha256 比對過官方 APK），所以修復純粹是「補回去」，
-不需要動既有條目。
+**修法**：`build.py` 的 `restore_lost_entries()` —— 回包後、簽名前，把「官方 APK 有、
+產出沒有」的條目原封不動塞回去（排除 `META-INF/` 與刻意刪掉的 `lib/armeabi-v7a/`）。
+全新建置與 `--reinject` 都會補，所以舊的壞 APK 直接 `--reinject` 一分鐘就能修好。
+掉的若是 `res/` 以外的東西，它會直接 `SystemExit` 而不是默默放行。
 
-**為什麼只有他的手機掛**：`drawable/dmmgames_logo` 有三個密度變體，
-`hdpi`(`res/MA.png`) 和 `xxhdpi`(`res/S0.png`) 都掉了，**只剩 `xhdpi` 活著**。
-Pixel 9a 約 422dpi → 落在 xxhdpi 桶 → 解析到 `res/S0.png` → 檔案不存在 → 閃退。
-我的 OPPO 是 xhdpi 桶，永遠踩不到。
-**Android 不會因為「檔案不存在」就退回別的密度** —— 資源表查詢本身已經成功了，
-它只是打不開那個檔。所以這種傷害是「看機器」的，不是「看使用者操作」的。
-
-另外 **26 個資源三個密度全滅**，是還沒引爆的地雷，任何機器只要走到那條路徑就炸：
-`layout/activity_webview_timeout`（DMM SDK 連線逾時畫面）、
-`drawable/btn_outlined_cyan` / `btn_outlined_magenta`、
-`drawable/material_cursor_drawable`（輸入框游標）、
-`drawable/abc_ic_clear_material`、`layout/select_dialog_item_material`、
-`design_snackbar_background` 等。
-
-**修法**：`build.py` 的 `restore_lost_entries()` —— 回包後、簽名前，
-把「官方 APK 有、產出沒有」的條目原封不動塞回去
-（排除 `META-INF/` 和刻意刪掉的 `lib/armeabi-v7a/`）。
-全新建置走 `patch_base()`，`--reinject` 也會補（用 `apk/DotAbyssX-<版本>-official.apk`），
-所以舊的壞 APK 直接 `--reinject` 一分鐘就能修好。
-如果哪天 apktool 掉的是 `res/` 以外的東西，它會直接 `SystemExit` 而不是默默放行。
-
-**教訓**：這個專案的驗證一直只在一台機器上做。
-「在我機器上正常」對**密度／語系／夜間模式**相關的資源問題完全沒有證明力，
-因為每台機器解析到的檔案不一樣。回包後比對 zip 條目清單是零成本的，
-應該每次都做 —— 也就是現在 `restore_lost_entries()` 做的事。
+**教訓**：「在我機器上正常」對**密度／語系／夜間模式**相關的資源問題完全沒有證明力，
+因為每台機器解析到的檔案不一樣。回包後比對 zip 條目清單是零成本的，每次都該做。
