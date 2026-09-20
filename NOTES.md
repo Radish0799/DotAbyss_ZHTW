@@ -5,7 +5,7 @@
 > 字型：`res/ttcuyuanj`（Unity 6000.3.8f1，與遊戲相符）。
 > 使用者已確認該字型由 Unity 提供、可自由使用。
 > `res/notosanscjktc` 是 Unity 2021.3.25f1、來自 TSKHook，**不能用**——
-> 版本不合會讓文字渲染成空白（不是方框），詳見五之三。
+> 版本不合會讓文字渲染成空白（不是方框），詳見第五節。
 
 ## 〇、本機工具版本（2026-09-13 換機後重裝）
 
@@ -24,7 +24,7 @@ Gadget 選 17.x 是因為 `frida-il2cpp-bridge` 0.12.2 與 `@types/frida-gum` ^1
 Frida 17 的 gum API；換大版號要連著這兩個一起看。
 
 apktool 停在 **2.x 線**（最新的 2.12.1），不是當時已經發布的 3.0.3。這專案出貨過的
-APK 都是 2.x 編的，而 apktool 大版號會動到資源 round-trip 的行為——本檔五之一那個
+APK 都是 2.x 編的，而 apktool 大版號會動到資源 round-trip 的行為——本檔第九節那個
 「Windows 大小寫不敏感吃掉 res/ 檔案」的修補正是針對 2.x 的行為寫的。要升 3.x
 請當成一次獨立的、需要實機驗證的改動，不要在補裝環境時順手換掉。
 
@@ -79,42 +79,25 @@ Build Tools 的 zip 解開來叫 `android-14`，**必須改名成 `34.0.0`**：
 - 換行在字典裡是 `<br>`，全形空白是 `　`
 - 攤平後共 **87642** 筆（2026-08-20 官方更新後）
 
-## 三、實機現況（2026-08-20）
+## 三、prefab 靜態標籤為什麼要靠 `OnEnable`（已修，別改回去）
 
-裝置：OPPO CPH2695 / Android 15，已安裝 `dist/DotAbyssX-R18-zh-Hant.apk`（**1.8.0**）。
-1.7.0 → 1.8.0 是完整重打包（不是 `--reinject`），同一把 keystore，
-`adb install -r` 升級後 `firstInstallTime` 不變，存檔保留。
-
-**會翻譯的**：角色名、稱號、技能／能力說明、對話框按鈕（取消／播放）、
-道具名樣板（`ランク4のコモン ウィンドマント` → `普通風之披風 Rank4`）。
-
-**不會翻譯的**：畫面上的靜態標籤 —
-`パラメータ`、`レベルアップ`、`アビリティ強化`、`ホーム`、`パーティ`、`ショップ`、
-`ガチャ`、`クエスト`、`お気に入り登録`、`表示切替`、`キャンペーン`、`コスチューム`、
-`スキル`、`チャージ`、`所持`、`プロフィール`、`贈る`…
-
-## 四、靜態標籤為什麼沒翻（根因）
-
-這些字串**字典裡全都有**（已用 `probe.py` 驗證：`パラメータ`→`參數`、
-`ホーム`→`首頁`、`ガチャ`→`轉蛋`、`お気に入り登録`→`登錄最愛`…）。
-沒生效的原因有兩個，都在 `src/index.ts`：
+`パラメータ`、`ホーム`、`ガチャ`、`お気に入り登録` 這類畫面上的固定標籤，
+**字典裡全都有**，但一度整批沒生效。兩個根因都值得記住，因為現在的寫法就是為了它們：
 
 1. **它們不走 `set_text`。** prefab 上的固定標籤是 Unity 反序列化直接寫進
    `m_text` 欄位的，屬性 setter 從來不會被呼叫，所以 setter hook 抓不到。
-   唯一能補的是掃描場上活著的 text component（`Il2Cpp.gc.choose`）。
+   現在靠 `TMP_Text.OnEnable` hook 補——由 Unity 自己的執行緒在畫面實體化 prefab
+   時呼叫，閒置時零成本。
 
-2. **既有的掃描只跑一次，而且寫回原文。**
-   `refreshExistingTexts()` 算出 `next` 之後，卻呼叫
-   `set_text.invoke(Il2Cpp.string(current.content))` —— 傳的是**原文**。
-   在 frida-il2cpp-bridge 裡，`.implementation` 內／外用 `.invoke()` 走的是
-   **原始實作**（TSK 的 `this.method('OnEnable').invoke()` 也是靠這個語意才不會無限遞迴），
-   所以這行等於把日文原封不動寫回去，整個 refresh 是空轉。
-   而且它只在翻譯載入完成時跑一次（開場約 40 秒，還停在標題畫面），
-   之後開的每一個畫面都掃不到。
+2. **`.invoke()` 走的是原始實作。**
+   當初 `refreshExistingTexts()` 算出 `next` 之後卻呼叫
+   `set_text.invoke(Il2Cpp.string(current.content))`，傳的是**原文**。
+   在 frida-il2cpp-bridge 裡，`.implementation` 內／外用 `.invoke()` 一律走
+   **原始實作**（`this.method('OnEnable').invoke()` 也是靠這個語意才不會無限遞迴），
+   所以那行等於把日文原封不動寫回去，整個 refresh 是空轉。
+   **要讓翻譯生效就得傳 `next`**，這個陷阱在任何一個 hook 裡都一樣。
 
-→ 修法：把寫回值改成 `next`，並改用 **`OnEnable` hook**（不是週期性掃描，原因見下節）。
-
-## 四之二、🩸 不要用 `Il2Cpp.gc.choose` 做週期性掃描（2026-08-11 事故）
+## 三之二、🩸 不要用 `Il2Cpp.gc.choose` 做週期性掃描（2026-08-11 事故）
 
 我第一版的修法是每 1.5 秒跑一次 `refreshExistingTexts()`。**這會把遊戲整個卡死。**
 
@@ -147,9 +130,9 @@ Killing <pid> (adj 0): user request after error
 要抓後續畫面的靜態標籤，用 `OnEnable` hook——它由 Unity 自己的執行緒呼叫，
 閒置時零成本。
 
-## 五、劇情文字沒翻（2026-08-11 已用實機資料確認）
+## 四、劇情文字為什麼不能在 `set_text` 這層翻（已修，hook 點在 `NovelArgument.SetString`）
 
-**結論：遊戲是「一個字一個 TMP_Text」在畫劇情文字。** 不是前綴漸增，是逐字拆開。
+**遊戲是「一個字一個 TMP_Text」在畫劇情文字。** 不是前綴漸增，是逐字拆開。
 
 實機 logcat（`dist/run4-logcat.txt`，14:46:56）：
 
@@ -166,23 +149,15 @@ UNMATCHED TMPro.TMP_Text.set_text :: "ぁ"
 那正是 `きゃあ～！　ちびたぁ～～～！` 被拆成單字。所以**在 `set_text` 這一層永遠
 不可能命中整句**，字典裡的 key 是整句，進來的是一個字。
 
-→ 要翻劇情，必須往上一層攔：找決定「這一行要顯示什麼」的元件（Absf/Absl 裡的
-劇情播放器），在它拿到整行時替換，而不是在 TMP 這層。這還沒做。
+→ 所以必須往上一層攔，在元件拿到整行時替換。**這也解釋了為什麼 UI 能翻、劇情不能翻**
+——UI 是整串進 `set_text`，劇情是逐字。
 
-**這也解釋了為什麼 UI 能翻、劇情不能翻**——UI 是整串進 `set_text`，劇情是逐字。
+順帶一提，同一輪撈到的
+`"「海辺のお姫様」<br>を再生します。よろしいですか？"` 正是 `AGENTS.md`
+「Mixed keys are real keys」講的東西：遊戲先翻好標題、組成整句、再查一次。
+要補就得把**這個組合後的完整字串**原樣存進字典。
 
-### 同一輪撈到的其他未命中（屬於翻譯資料缺口，不是程式問題）
-
-```
-"真夏の直感"                                    技能名，字典只有「…的最大等級提高到{0}！」
-"【発動条件】通常攻撃を2回\n【効果】…"           能力描述
-"「海辺のお姫様」<br>を再生します。よろしいですか？"  ← 組合式 mixed key
-```
-
-最後那條正是 `AGENTS.md`「Mixed keys are real keys」講的東西：遊戲先翻好標題、
-組成整句、再查一次。要補就得把**這個組合後的完整字串**原樣存進字典。
-
-## 五之二、劇情的 hook 點（2026-08-11 實機 dump 確認）
+## 四之二、劇情的 hook 點：`NovelArgument.SetString`
 
 `Absf.Novel` 就是劇情引擎。實機 dump 出來的關鍵 API：
 
@@ -204,10 +179,9 @@ Absf.Novel.NovelArguments.GetString(System.Int32 index, System.String defaultval
 - 在逐字拆解**之前**，整句還完整
 - 每個欄位只在載入時呼叫一次，不是每幀
 
-⚠️ 尚未實機驗證。已編進 `dist/DotAbyssX-R18-zh-Hant.apk`（15:13 那版），
-成功時 logcat 會有 `NOVEL "日文…" -> "中文…"`。
+已實機驗證並長期運作中。logcat 開機時應有 `hooked Absf.Novel.NovelArgument.SetString`。
 
-## 五之三、字型／方框字（2026-08-11 實機 dump 確認）
+## 五、字型／方框字（2026-08-11 實機 dump 確認）
 
 方框字的原因：遊戲的 TMP 圖集是為**日文**建的，中日共用漢字都在，
 **中文特有字不在**。實例：`讓我見識一下□的本事□！`，字典原文是
@@ -232,39 +206,24 @@ LoadAsset(System.String, System.Type)        ← 同步，可用 ✅
 GetAllAssetNames                             ← 已被剝掉 ❌
 ```
 
-所以可行路徑是：`System.IO.File.ReadAllBytes(persistentDataPath + "/notosanscjktc")`
-→ `AssetBundle.LoadFromMemory(bytes)` → `LoadAsset("notosanscjktc SDF", typeof(TMP_FontAsset))`。
-**已實測 `LoadFromMemory` 成功載入 28228663 bytes 的 bundle。**
+所以走的路徑是：`File.ReadAllBytes` → `AssetBundle.LoadFromMemory(bytes)`
+→ 單參數版 `LoadAsset("<bundle 名> SDF")`。
+（`LoadAsset(String, Type)` 用 `klass.type.object` 當 `typeof(T)` 傳進去會觸發原生
+`breakpoint triggered`，所以刻意用單參數多載。）
 
-字型檔目前是 `adb push` 到 `persistentDataPath` 的，**不在 APK 裡**：
+**字型現在隨 APK 出貨**：`res/ttcuyuanj` 在完整重建時被複製到
+`assets/bin/Data/Managed/`，Unity 第一次啟動會把它解到 `persistentDataPath/il2cpp/`，
+hook 就從那裡讀。找不到時會退去找 `.../files/<name>`，所以開發期 `adb push` 一份到
+後者也能蓋過去。成功時 logcat 印
+`FONT OK: "TTCuYuanJ SDF" from ttcuyuanj added to TMP fallbacks`。
 
-```
-adb push res/notosanscjktc /storage/emulated/0/Android/data/jp.co.fanzagames.dotabyss_x_a/files/notosanscjktc
-```
+⚠️ 這條路徑只有**完整重建**才會進 APK，`--reinject` 不碰 assets。
 
-正式版要自帶的話得另想辦法（APK 內的 assets 不能用 `File.ReadAllBytes` 讀，
-`dataPath` 指向的是 base.apk 檔案本身）。一個可行方向是把字型以 **STORED（不壓縮）**
-放進 APK，再由 hook 自己解析 zip central directory 取 bytes——不需要 inflate。
+### 🩸 別把字型載入放在啟動路徑或 `set_text` 裡
 
-### 🩸 字型探測目前是**關閉**的（2026-08-11 17:27 實測失敗）
-
-在 `set_text` 裡跑字型載入的那一版，遊戲開機就黑畫面。logcat：
-
-```
-FONTPROBE LOADED via LoadFromMemory
-FONTPROBE FAILED: Error: breakpoint triggered          ← LoadAsset 原生層爆掉
-text refresh embedded-complete #1; scanned=31; matched=7; 2806ms   ← 原本只要 80ms
-```
-
-兩個問題：
-
-1. `LoadAsset(String, Type)` 用 `klass.type.object` 當 `typeof(T)` 傳進去會觸發
-   原生錯誤（`breakpoint triggered`），還沒找到正確傳法。
-2. 光是讓那包 28 MB bundle 常駐，就把啟動時那次一次性 `gc.choose` 補掃
-   從 **80ms 拖到 2806ms**——heap 變大，掃描成本跟著漲。這也再次印證四之二。
-
-`fontProbe()` 現在只留定義、**沒有任何呼叫點**。要重做的話，
-**不要放在啟動路徑上**，也不要放在 `set_text` 裡。
+早期在 `set_text` 裡載字型的那一版，遊戲開機就黑畫面：光是讓那包 28 MB bundle
+常駐，就把啟動時那次一次性 `gc.choose` 補掃從 **80ms 拖到 2806ms**——heap 變大，
+掃描成本跟著漲。這再次印證三之二。
 
 ### 🩸 移動式 GC：**絕對不要跨呼叫保存 `Il2Cpp.Object`**
 
@@ -303,11 +262,11 @@ FONT FAILED: Error: access violation accessing 0x0
 但 `TMP_Settings` / `TMP_FontAsset` 的 fallback API 還沒 dump 到，
 15:13 那版有加 `TMPAPI` 探測，跑一次就會印出來。
 
-## 五之四、🩸 三次凍結，三個不同原因（都是我造成的）
+## 六、🩸 三次凍結，三個不同原因（都是我造成的）
 
 | # | 原因 | 症狀 | 教訓 |
 |---|---|---|---|
-| 1 | 每 1.5 秒 `Il2Cpp.gc.choose` 掃描 | 迴圈啟動後約 40 秒 ANR | GC 掃描只能一次性，見四之二 |
+| 1 | 每 1.5 秒 `Il2Cpp.gc.choose` 掃描 | 迴圈啟動後約 40 秒 ANR | GC 掃描只能一次性，見三之二 |
 | 2 | override 用 `eval()` 吃 frida bundle | SyntaxError → 靜靜跑回舊腳本 | 見第七節 |
 | 3 | 在 hook 裡跑 `image.classes` | 主執行緒卡死數分鐘、**完全無輸出** | 見下 |
 
@@ -319,7 +278,7 @@ FONT FAILED: Error: access violation accessing 0x0
 會「完全無輸出」還有第二層原因：`failFont()` 當時只有 `console.error` 和 `send()`，
 兩個在 script 模式都送不出去，例外就這樣人間蒸發。**現在已加 nativeLog。**
 
-## 五之四之二、🩸 跨專案抄 hook 前，一定要先 dump 目標的方法簽章
+## 六之二、🩸 跨專案抄 hook 前，一定要先 dump 目標的方法簽章
 
 2026-08-12。我把 anosu/DMM-Mod 的 `disableVoiceInterruption()` 照抄過來，
 沒查證簽章就上機 → **劇情語音整個消失，播一段後跳錯誤**。
@@ -361,17 +320,11 @@ StopCategory(System.Int32 nCategory, System.Boolean playFade) -> System.Void
 adb logcat -G 32M
 ```
 
-## 五之五、工具坑：`Select-String` 在這個檔案上會給假陰性
+## 六之三、工具坑：`Select-String` 在這個檔案上會給假陰性
 
 `dist/libgadget.js.so` 是 33 MB 而且幾乎是單行。PowerShell 的
 `Select-String -SimpleMatch` 對它會**漏報**（實測 `NovelArgument.SetString` 明明在
 檔案裡卻回報找不到，改用 ripgrep 一查有 5 處）。驗證 bundle 內容一律用 ripgrep。
-
-## 六、技能名缺翻譯（非程式問題）
-
-`灼熱サマー`、`海辺の焼き入れ`、`真夏の直感` 在字典裡只有
-「"…"的最大等級提高到{0}！」這種句子，沒有單獨的名稱條目。
-這是上游翻譯資料的缺口，要回 `Dot-abyess-Lienchu-version` 補。
 
 ## 七、開發迴圈
 
@@ -417,13 +370,7 @@ adb logcat -s DotAbyssHook:*
 `gadget` 是 `type: script` 模式（不開 port），所以 `tools/live_attach.py`
 需要另外改成 listen 模式的 config 才能用；平常診斷請直接看 logcat。
 
-## 九、啟動儀式（每次開遊戲都要）
-
-見 README「手機實測重啟流程」。重點：Planet VPN 連 `Japan - Osaka` →
-等畫面顯示 `You are protected` → 開遊戲 → 等紫色 `LOADING` 出現後 8～11 秒、
-且還沒到 `GAME START` 時，從通知列按 `Disconnect`。
-
-## 十、🩸 apktool 在 Windows 上弄丟大小寫衝突的資源（2026-08-12 事故）
+## 九、🩸 apktool 在 Windows 上弄丟大小寫衝突的資源（2026-08-12 事故）
 
 **症狀**：朋友的 Pixel 9a 一直閃退，我的 OPPO（Android 15）完全正常。
 hook 本身沒問題 —— gadget 載入成功、13 個 hook 全掛上、撐了 4 秒才死。

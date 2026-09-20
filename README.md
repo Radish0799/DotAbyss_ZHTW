@@ -23,7 +23,7 @@
 
 ## 目前狀態
 
-- 已於官方 FANZA 版 `1.7.0` 實機驗證 UI、角色名、靜態標籤、劇情與中文字型。
+- UI、角色名、靜態標籤、劇情與中文字型皆已實機驗證，隨官方版本持續更新。
 - 支援官方 arm64 APK，以及包含 arm64 split 的 XAPK。
 
 ## 從原始碼建置
@@ -45,17 +45,18 @@ npm install
 python -m pip install -r requirements.txt
 ```
 
-把必要的本機檔案放到以下位置。前兩個被 `.gitignore` 擋著；`dotabyss.keystore` 不擋，但 repo 裡從來沒有它，clone 完一樣不會有：
+把必要的本機檔案放到以下位置。這兩個被 `.gitignore` 擋著，clone 完不會有：
 
 ```text
 frida/gadget-android-arm64.so
 tools/apktool.jar
-dotabyss.keystore
 ```
+
+`dotabyss.keystore` 自 2026-09-13 起已進版控（本 repo 是公開的，這是刻意的決定），clone 就會帶到。
 
 （`frida/libgadget.config.so` 與 `res/ttcuyuanj` 有進版控，不用自己準備。）
 
-**`dotabyss.keystore` 是其中唯一重建不出來的。** Android 只認簽章，換一把就等於
+**`dotabyss.keystore` 是整個專案唯一重建不出來的檔案。** Android 只認簽章，換一把就等於
 所有已安裝的人必須卸載重裝、存檔全失。`build.py` 因此在最開頭就先驗簽章身分：
 
 - 檔案不存在 → **直接中止**。真的要一個全新、與現有玩家無關的身分（自己的 fork、
