@@ -107,7 +107,15 @@ function buildDynamicTemplates() {
             const literal = source.slice(cursor, offset);
             literalLength += literal.length;
             pattern += escapeRegex(literal);
-            pattern += "([\\s\\S]+?)";
+            // `[\s\S]+?` is lazy, but a trailing `$` still forces it to grow until
+            // the tail matches *somewhere*, so a key like 自身の攻撃力が【{4%}】上昇
+            // happily swallowed 「4%】上昇 / 自身の状態異常付与確率が【15%」 out of a
+            // longer description and printed 「自身攻擊力上升【4%】上昇 / 自身の…」.
+            // A masterdata value is a number or a duration sitting inside 【】, so it
+            // can never contain 【 】 or a line break -- forbidding those kills the
+            // whole class.  .NET-style {0} parameters are the exception: those carry
+            // item and character names, and 【水着】ニナ is a real one.
+            pattern += /^\{\d+\}$/.test(match[0]) ? "([\\s\\S]+?)" : "([^【】\\r\\n]+?)";
             if (!captureByToken.has(match[0])) captureByToken.set(match[0], index + 1);
             cursor = offset + match[0].length;
         });
@@ -706,8 +714,50 @@ function templateLookup(text: string): string | null {
     return null;
 }
 
+// The 能力強化 screen builds ONE string out of TWO masterdata rows:
+//   <m_ability_details/description><br><color=#D7DEF8>【覚醒効果】</color><awake_description>
+// AbyssStaticFix rewrites both rows before the game joins them, so the PC mod
+// never sees this; we intercept after the join, and the joined string is a key
+// nobody has.  Worse than a miss: a template whose tail happens to match the
+// composite's tail swallows the whole awake half into its capture group, which
+// is how 「我方全體攻擊力上升【4.6%】上昇」 reached the screen.  Only three
+// composites were ever transcribed by hand into ui_texts, so splitting here is
+// the only thing that scales.  Split, translate each half on its own, rejoin.
+const awakeSplit = /^([\s\S]*?)((?:<br>|\n)*(?:<color=[^>]*>)?)【覚醒効果】((?:<\/color>)?)([\s\S]*)$/;
+
+// One half of a composite: exact hit, then template, then the same tag-stripped
+// retry `translated()` does for whole strings (紋章 colouring lands inside the
+// halves too).  Deliberately does not recurse into lookup() -- a half is always
+// a plain masterdata row, never another composite.
+function lookupHalf(text: string): string | null {
+    if (text === "") return "";
+    if (translations[text]) return translations[text];
+    let result = templateLookup(text);
+    if (result === null && text.indexOf("<") !== -1) {
+        const stripped = text.replace(richTextTag, "");
+        if (stripped !== text) result = translations[stripped] ?? templateLookup(stripped);
+    }
+    return result;
+}
+
+function translateAwakeComposite(text: string): string | null {
+    if (text.indexOf("【覚醒効果】") === -1) return null;
+    const match = awakeSplit.exec(text);
+    if (match === null) return null;
+    const [, head, open, close, tail] = match;
+    const headZh = lookupHalf(head);
+    const tailZh = lookupHalf(tail);
+    // Nothing gained -- let the caller fall through rather than rewrite the
+    // label onto two untranslated halves.
+    if (headZh === null && tailZh === null) return null;
+    return `${headZh ?? head}${open}【覺醒效果】${close}${tailZh ?? tail}`;
+}
+
 function lookup(text: string): string | null {
     if (translations[text]) return translations[text];
+    // Before templateLookup: an unsplit composite is exactly what corrupts it.
+    const awake = translateAwakeComposite(text);
+    if (awake !== null) return awake;
     if (text.charCodeAt(0) === 0x300c) {
         const composed = translateComposed(text);
         if (composed !== null) return composed;
