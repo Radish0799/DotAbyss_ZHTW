@@ -773,8 +773,28 @@ function lookup(text: string): string | null {
 // colour tags itself (a project rule, see AGENTS.md), so the output stays right.
 const richTextTag = /<\/?(?:color|b|i|u|s|size|sprite|link|align|font|mark|nobr)\b[^>]*>/gi;
 
+// Story text reaches TMP one character at a time (NOTES section 4), so every
+// single Chinese character of an already-translated line comes back through
+// set_text on its own -- and a one-character key in the dictionary matches it.
+// m_jobs/name alone carries 杖 -> 法杖 and 拳 -> 拳套, so a cell one character
+// wide receives two, TMP wraps them, and the line reads 傳說中的法[ ]！！ with
+// 法 floating above the gap and 杖 below it.  Measured 2026-09-22 against the
+// shipped data: 杖 222 occurrences in 59 scripts, 拳 80 in 53, 豆 11 in 9.
+//
+// Only same-length replacements survive: 銃 -> 槍 and 猫 -> 貓 cannot overflow a
+// one-character cell, and they are the correct Traditional Chinese forms inside
+// story text anyway.  The cost is that the weapon-type labels in the UI stay 杖
+// and 拳 instead of 法杖 and 拳套 -- both already read as Traditional Chinese.
+// The PC mod is not affected: AbyssStaticFix rewrites masterdata in place, so
+// static/ never becomes a runtime lookup table there.
+function translateSingleChar(text: string): string {
+    const single = translations[text];
+    return single !== undefined && single.length === 1 ? single : text;
+}
+
 function translated(text: string | null): string | null {
     if (text === null || text === "") return text;
+    if (text.length === 1) return translateSingleChar(text);
     const cached = dynamicCache[text];
     if (cached !== undefined) return cached;
 
