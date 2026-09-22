@@ -184,6 +184,18 @@ TMP 折行成兩行，垂直置中 → 第一行在上、第二行在下，中�
 **不要改回去用「白名單特定字」**：這條是通則，日後 masterdata 再加任何單字 key
 都會自動被擋住；列舉法只會在下一次改版又漏掉。
 
+**守門有效的時候完全看不出來，所以兩個地方都會把它擋下來的 key 唸出來**——
+不然下一個人（或下一個我）會把它當成沒用的程式碼刪掉：
+
+- `npm run build` 會印 `single-char keys suppressed at runtime (N)`，
+  一行一個 key，附「在出貨劇情文字裡出現幾次」。新的危險 key 一進 masterdata 就看得到，
+  不必等玩家傳截圖。
+- 開機 logcat 會印 `single-char keys suppressed (N): 杖->法杖 拳->拳套 …`。
+  要判斷「手上這包 APK 有沒有帶修正」就看這一行。
+
+**也不要反過來去改劇情那一句**。畫面上疊在一起的是 `static/` 的 key 造成的，
+改劇情譯文只會讓同一個字在別的 53 篇裡繼續疊。
+
 **PC 版沒有這個問題**，所以別拿 Windows 端的行為來推翻這節：`AbyssStaticFix` 是直接
 改寫 masterdata，`static/` 在那邊不會變成執行期查表。這是 Android 專有的失效模式。
 

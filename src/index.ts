@@ -185,6 +185,7 @@ async function loadTranslations() {
     }
     applyAndroidOverrides();
     buildDynamicTemplates();
+    reportSuppressedSingleChars();
     refreshExistingTexts("embedded-complete");
     // Only now may the font load start: it must not inflate the heap before the
     // one-shot sweep above has run.
@@ -790,6 +791,21 @@ const richTextTag = /<\/?(?:color|b|i|u|s|size|sprite|link|align|font|mark|nobr)
 function translateSingleChar(text: string): string {
     const single = translations[text];
     return single !== undefined && single.length === 1 ? single : text;
+}
+
+// The guard above is invisible when it works, which is exactly how it would get
+// edited away again.  One logcat line at startup says which keys it is holding
+// back, so `adb logcat -s DotAbyssHook:*` answers "is this build guarded?" without
+// hunting for a glyph on screen.  tools/generate-embedded-translations.mjs prints
+// the same list at build time.
+function reportSuppressedSingleChars() {
+    const suppressed: string[] = [];
+    for (const key of Object.keys(translations)) {
+        if (key.length === 1 && translations[key].length !== 1) {
+            suppressed.push(`${key}->${translations[key]}`);
+        }
+    }
+    nativeLog(`single-char keys suppressed (${suppressed.length}): ${suppressed.join(" ") || "none"}`);
 }
 
 function translated(text: string | null): string | null {
